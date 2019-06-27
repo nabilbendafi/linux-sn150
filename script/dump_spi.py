@@ -12,9 +12,10 @@ LOGGER.addHandler(logging.StreamHandler())
 LOGGER.setLevel(logging.INFO)
 
 try:
+    import hexdump
     import serial
 except ImportError as _:
-    LOGGER.error('Failed to load module. Please install pyserial.')
+    LOGGER.error('Failed to load module. Please install hexdump and serialpyserial.')
     sys.exit(1)
 
 parser = argparse.ArgumentParser(description='Dump SPI flash content',
@@ -76,7 +77,7 @@ def main():
                         m = regex.match(line)
                         if m:
                             line = m.groupdict()
-                            hexa = ' '.join(re.findall('.{4}',
+                            hexa = ' '.join(re.findall('..',
                                                        line['hex'].replace(' ', '')))
 
                             line = "%s: %s  %s\n" % (address_format % (offset * 16),
@@ -87,6 +88,11 @@ def main():
                             o.write(line)
         except serial.serialutil.SerialException as se:
             LOGGER.error('Failed to open %s: %s' % (device, str(se)))
+    with open(output.as_posix(),'r') as txt:
+        LOGGER.info('Convert dump to binrary')
+        hex_dump = txt.read()
+        with open(output.as_posix(),'bw') as binary:
+            binary.write(hexdump.restore(hex_dump))
 
 
 if __name__ == "__main__":
