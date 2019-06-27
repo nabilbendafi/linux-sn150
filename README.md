@@ -9,12 +9,14 @@ Please refers to [Disclaimer](#disclaimer) before performing any action on your 
    - [Technical stack](#technical-stack)
      - [Network interface](#network-interface)
      - [Internal storage](#internal-storage)
-     - [Boot](#boot)
+     - [Default boot](#default-boot)
  - [U-boot](#u-boot)
    - [Dump SPI flash](#dump-spi-flash)
    - [Load in RAM](#load-in-ram)
    - [Build new version](#build-new-version)
  - [Linux](#linux)
+   - [Boot linux from USB](#boot-linux-from-usb)
+   - [Build](#build)
  - [References](#references)
  - [Disclaimer](#disclaimer)
  - [Licence](#licence)
@@ -198,9 +200,9 @@ SN150>> fatls mmc 1:2
 1 file(s), 0 dir(s)
 ```
 
-  * _bootusb_ shows **usb start**. This means is has the ability to mount a USB drive and boot from it (ex. for recovery).
+  * _bootusb_ shows **usb start**. This means is has the ability to mount a USB drive and boot from it (ex. for recovery). Read more below in [Boot linux from USB](#boot-linux-from-usb) section.
 
-#### Boot
+#### Default boot
 
 _bootcmd_ [U-boot](https://www.denx.de/wiki/U-Boot) variable defines a command string that is automatically executed when the initial countdown is not interrupted.
 
@@ -303,11 +305,11 @@ ff00003c: 00000121 e3a00000 e59f222c e5921000    !.......,"......
 ```
 Here 00000**121** means **v1.21**. So we are good. This means it can load image over serial. Really helpful in case you brick your SNS.
   - Make sure to have **u-boot-tools** installed on your computer.
-    On _Debian_/_Ubuntu_i, install it by running:
+    On _Debian_/_Ubuntu_, install it by running:
 ```bash
 sudo apt install u-boot-tools
 ```
-  - Download a _U-boot_ build for a compatible board (same SoC). I'll use [u-boot.kwb](http://ftp.debian.org/debian/dists/stretch/main/installer-armel/current/images/kirkwood/u-boot/sheevaplug/u-boot.kwb) from [Upgrading u-boot on SheevaPlug
+  - Download a [U-boot](https://www.denx.de/wiki/U-Boot) build for a compatible board (same SoC). I'll use [u-boot.kwb](http://ftp.debian.org/debian/dists/stretch/main/installer-armel/current/images/kirkwood/u-boot/sheevaplug/u-boot.kwb) from [Upgrading u-boot on SheevaPlug
 ](https://www.cyrius.com/debian/kirkwood/sheevaplug/uboot-upgrade/). 
 
   - Run _kwboot_ (part of _u-boot-tools_)
@@ -489,17 +491,133 @@ $ make
 
 ## Linux
 
-### Boot
+### Boot linux from USB
 
-A vanilla _Debian_ or _Arch_ should boot fine with **machid** _0x692_. 
-Note: The mainline [U-boot](https://www.denx.de/wiki/U-Boot) command to set the machine id has since changed from _arcNumber_ to _machid_.
+Let's prepare a USB drive with a kernel and a root filesystem.
 
+We'll follow [Linux Kernel 5.1.0 Kirkwood package and Debian rootfs](https://forum.doozan.com/read.php?2,12096) and see if we can succesfully boot a _Debian_ on our SNS
+
+  * Download a _Debian_ root fs [Debian-4.12.1-kirkwood-tld-1-rootfs-bodhi.tar.bz2](https://bitly.com/2gW5oGg). It has kernel 4.12.1-kirkwood-tld-1 already installed.
+  * Create an ext2/ext3 partition on your USB drive
+```bash
+$ sudo fdisk /dev/sdb
+
+Welcome to fdisk (util-linux 2.31.1).
+Changes will remain in memory only, until you decide to write them.
+Be careful before using the write command.
+
+
+Command (m for help): p
+Disk /dev/sdb: 3,8 GiB, 4023386112 bytes, 7858176 sectors
+Units: sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 512 bytes
+I/O size (minimum/optimal): 512 bytes / 512 bytes
+Disklabel type: dos
+Disk identifier: 0x3fadad93
+
+Command (m for help): n
+Partition type
+   p   primary (0 primary, 0 extended, 4 free)
+   e   extended (container for logical partitions)
+Select (default p): p
+Partition number (1-4, default 1): 
+First sector (2048-7858175, default 2048): 
+Last sector, +sectors or +size{K,M,G,T,P} (2048-7858175, default 7858175): 
+
+Created a new partition 1 of type 'Linux' and of size 3,8 GiB.
+
+Command (m for help): p
+Disk /dev/sdb: 3,8 GiB, 4023386112 bytes, 7858176 sectors
+Units: sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 512 bytes
+I/O size (minimum/optimal): 512 bytes / 512 bytes
+Disklabel type: dos
+Disk identifier: 0x3fadad93
+
+Device     Boot Start     End Sectors  Size Id Type
+/dev/sdb1        2048 7858175 7856128  3,8G 83 Linux
+
+Command (m for help): a
+Selected partition 1
+The bootable flag on partition 1 is enabled now.
+
+Command (m for help): wq
+The partition table has been altered.
+Calling ioctl() to re-read partition table.
+Syncing disks.
+
+$ sudo mkfs.ext3 /dev/sdb1
+mke2fs 1.44.1 (24-Mar-2018)
+Creating filesystem with 982016 4k blocks and 245760 inodes
+Filesystem UUID: 8c782a64-8a73-4a84-9845-7e8b745c7ee6
+Superblock backups stored on blocks: 
+	32768, 98304, 163840, 229376, 294912, 819200, 884736
+
+Allocating group tables: done                            
+Writing inode tables: done                            
+Creating journal (16384 blocks): done
+Writing superblocks and filesystem accounting information: done 
 ```
-SN150>> setenv machid '0x692'
-SN150>> setenv bootcmd_usb 'usb start; fatload usb 0:1 0x6400000 /uImage-ipfire-kirkwood; fatload usb 0:1 0x6800000 /uInit-ipfire-kirkwood'
-setenv bootcmd 'setenv bootargs 'console=ttyS0,115200 root=/dev/sda3 rootdelay=5'; run bootcmd_usb; bootm 0x6400000 0x6800000'
-saveenv
+  * Mount it, extract root fs
+```bash
+$ sudo su - # Become root
+$ mount /dev/sdb1 /mnt
+# Extract rootfs and kernel
+$ cd /mnt
+$ tar xjvf <path>/Debian-4.12.1-kirkwood-tld-1-rootfs-bodhi.tar.bz2
+$ cd /mnt/boot
+# Generate uImage
+$ cp -a zImage-4.12.1-kirkwood-tld-1  zImage.fdt
+$ cat dts/kirkwood-rd88f6281-a1.dtb >> zImage.fdt
+$ mkimage -A arm -O linux -T kernel -C none -a 0x00008000 -e 0x00008000 -n Linux-4.12.1-kirkwood-tld-1 -d zImage.fdt  uImage
+$ sync && umount /mnt
 ```
+  * Unplug USB drive from computer and plug it on SNS
+  * Let's boot over USB
+```
+SN150>> usb start
+(Re)start USB...
+USB:   Register 10011 NbrPorts 1
+USB EHCI 1.00
+scanning bus for devices... 2 USB Device(s) found
+       scanning bus for storage devices... 1 Storage Device(s) found
+SN150>> ext2load usb 0:1 0x1c00000 /boot/dts/kirkwood-rd88f6281-a1.dtb
+Loading file "/boot/dts/kirkwood-rd88f6281-a1.dtb" from usb device 0:1 (usbda1)
+9992 bytes read
+SN150>> ext2load usb 0:1 0x1100000 /boot/uInitrd
+Loading file "/boot/uInitrd" from usb device 0:1 (usbda1)
+7245696 bytes read
+SN150>> ext2load usb 0:1 0x800000 /boot/uImage
+Loading file "/boot/uImage" from usb device 0:1 (usbda1)
+3831584 bytes read
+SN150>> setenv machid "0x692"
+SN150>> setenv bootargs "console=ttyS0,115200 root=/dev/sda1 rootdelay=10 rootwait"
+SN150>> bootm 0x800000 - 0x1c00000
+## Booting kernel from Legacy Image at 00800000 ...
+   Image Name:   Linux-4.12.1-kirkwood-tld-1
+   Created:      2019-06-27  10:25:05 UTC
+   Image Type:   ARM Linux Kernel Image (uncompressed)
+   Data Size:    3831520 Bytes = 3.7 MiB
+   Load Address: 00008000
+   Entry Point:  00008000
+   Verifying Checksum ... OK
+   Loading Kernel Image ... OK
+OK
+Using machid 0x692 from environment
+
+Starting kernel ...
+
+Uncompressing Linux... done, booting the kernel.
+[    0.000000] Booting Linux on physical CPU 0x0
+[    0.000000] Linux version 4.12.1-kirkwood-tld-1 (root@tldDebian) (gcc version 4.9.2 (Debian 4.9.2-10) ) #1 PREEMPT7
+[    0.000000] CPU: Feroceon 88FR131 [56251311] revision 1 (ARMv5TE), cr=0005397f
+[    0.000000] CPU: VIVT data cache, VIVT instruction cache
+[    0.000000] OF: fdt: Machine model: Marvell RD88f6281 Reference design, with A1 SoC
+[    0.000000] Memory policy: Data cache writeback
+....
+```
+
+Congratulations ! You now have a Stormshield SNS running **Linux**.
 
 ### Build
 
@@ -521,7 +639,6 @@ make multi_v5_defconfig
 make -j5 uImage modules
 ```
 
-Congratulations ! You now have a Stormshield SNS running **Linux**.
 
 ## References
 
