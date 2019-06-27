@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import re
 import sys
 import textwrap
 from pathlib import Path
@@ -35,7 +36,6 @@ parser.add_argument('-v', '--verbose',
 args = parser.parse_args()
 
 
-
 def main():
     if args.verbose:
         LOGGER.setLevel(logging.DEBUG)
@@ -44,7 +44,7 @@ def main():
     device = args.device
     output = Path(args.output)
 
-    LOGGER.debug('Open %s file' % output)
+    LOGGER.info('Open %s file' % output)
     with open(output.as_posix(), 'w') as o:
         LOGGER.info('Open %s serial device' % device)
         try:
@@ -55,22 +55,35 @@ def main():
                 s.write(cmd)
                 _ = s.readlines()
 
-                start_address = '0x%08x' % 0x0  # 0x00000000
-                for i in range(3):
+                address_format = '%08x'  # 0x00000000
+                offset = 0x0
+
+                for i in range(2):
                     cmd = b'sf read 0x08000000 %d 100\n' % (i*100)
                     LOGGER.debug('Send %s to %s' % (cmd, device))
                     s.write(cmd)
                     _ = s.readlines()
 
-                    cmd = b'md 0x08000000\n'
-                    LOGGER.debug('Send %s' % cmd)
+                    cmd = b'md.b 0x08000000\n'
+                    LOGGER.debug('Send %s to %s' % (cmd, device))
                     s.write(cmd)
                     _ = s.readline()
                     lines = s.readlines()
                     for line in lines:
                         line = line.decode('utf-8')
-                        if not line.startswith('SN150'):
-                            LOGGER.debug('Send %s to %s' % (cmd, device))
+                        regex = '(?P<offset>[0-9a-fA-F]+): (?P<hex>([0-9a-fA-F]+ ){15}[0-9a-fA-F]+) *(?P<ascii>.*)'
+                        regex = re.compile(regex)
+                        m = regex.match(line)
+                        if m:
+                            line = m.groupdict()
+                            hexa = ' '.join(re.findall('.{4}',
+                                                       line['hex'].replace(' ', '')))
+
+                            line = "%s: %s  %s\n" % (address_format % (offset * 16),
+                                                     hexa,
+                                                     line['ascii'])
+                            offset += 1
+                            LOGGER.debug('Write %s to %s' % (line, output))
                             o.write(line)
         except serial.serialutil.SerialException as se:
             LOGGER.error('Failed to open %s: %s' % (device, str(se)))
