@@ -314,7 +314,7 @@ sudo apt install u-boot-tools
 
   - Run _kwboot_ (part of _u-boot-tools_)
 ```bash
-kwboot -t -B 115200 /dev/ttyUSB0 -b u-boot.kwb
+kwboot -t -p -B 115200 /dev/ttyUSB0 -b u-boot.kwb
 ```
 Note: In case of _/dev/ttyUSB0: Permission denied_, you might have to run the above command as _sudo_ or add your user to _dialout_ group.
 
@@ -411,7 +411,14 @@ Though, we can read its content on command line, using `sf` U-boot command.
 Use [dump_spi.py](script/dump_spi.py) to dump the SPI Flash memory content to file.
 This script basically runs multiple `sf` commands to load content in RAM and `md` commands to display RAM content on stdout. It concatenate output and convert the result to binary file in current directory (*dump_spi.kwb*).
 
-Note: It relies on Python [pyserial](https://pypi.org/project/pyserial/) package.
+Note: It relies on Python [pyserial](https://pypi.org/project/pyserial/) and [hexdump](https://pypi.org/project/hexdump/) packages.
+
+By looking a the dump we as-well verify its structure:
+```
+0x00000000-0x00060000 : "U-Boot"
+0x00060000-0x00080000 : "Environment"
+```
+It starts with byte `5a` which means `0x5A = Boot from Serial (SPI) flash` (Refer to [88F6180, 88F6190, 88F6192, and 88F6281 Integrated Controller - Functional Specifications](https://wikidevi.com/files/Marvell/FS_88F6180_9x_6281_OpenSource.pdf) - Section _24.2.4.1 Main Header Format_ for details).
 
 **Test** that the dump is bootable (ref. to [Load in RAM](#load-in-ram)) and **save it cautiously**.
 
@@ -453,6 +460,25 @@ FB base     = 0x00000000
 
 This matches `#define MACH_TYPE_RD88F6281            1682` (0x692 = 1682) defined in _arch/arm/include/asm/mach-types.h_
 
+Note: `0x692` will be passed as env variable when we'll boot Linux kernel.
+
+Simply read the running [U-boot](https://www.denx.de/wiki/U-Boot) and we can figure out what to put in our _kwbimage.cfg_
+
+```
+SN150>> sf read 0x08000000 0 100
+SN150>> md 0x08000000
+08000000: 0800005a 00037a90 00000000 00000200    Z....z..........
+08000010: 00600000 00600000 00000000 32010000    ..`...`........2
+08000020: 00000040 00000000 00000000 00000000    @...............
+08000030: 00000000 00000000 00000000 00000000    ................
+08000040: ffd100e0 1b1b1b9b ffd01400 43000c30    ............0..C
+08000050: ffd01404 37543000 ffd01408 22125441    .....0T7....AT."
+08000060: ffd0140c 00000a32 ffd01410 000000cc    ....2...........
+08000070: ffd01414 00000000 ffd01418 00000000    ................
+```
+
+Look at address `08000040`, `ffd100e0 1b1b1b9b` => `DATA 0xffd100e0 0x1b1b1b9b` and so one. Refer to [88F6180, 88F6190, 88F6192, and 88F6281 Integrated Controller - Functional Specifications](https://wikidevi.com/files/Marvell/FS_88F6180_9x_6281_OpenSource.pdf) - Section _List of Registers_ for details about bytes values and meaning.
+But so far we just copy/paste.
 
 ```cfg
 # Boot Media configurations
@@ -461,29 +487,20 @@ BOOT_FROM       spi     # Boot from SPI flash
 # Configure RGMII-0 interface pad voltage to 1.8V
 DATA 0xffd100e0 0x1b1b1b9b
 
-DATA 0xffd01400 0x43000c30      # DDR Configuration register
-# bit13-0:  0xc30, (3120 DDR2 clks refresh rate)
-# bit23-14: 0x0,
-# bit24:    0x1,   enable exit self refresh mode on DDR access
-# bit25:    0x1,   required
-# bit29-26: 0x0,
-# bit31-30: 0x1,
-
-DATA 0xffd01404 0x37543000      # DDR Controller Control Low
-# bit4:     0x0, addr/cmd in smame cycle
-# bit5:     0x0, clk is driven during self refresh, we don't care for APX
-# bit6:     0x0, use recommended falling edge of clk for addr/cmd
-# bit14:    0x0, input buffer always powered up
-# bit18:    0x1, cpu lock transaction enabled
-# bit23-20: 0x5, recommended value for CL=5 and STARTBURST_DEL disabled bit31=0
-# bit27-24: 0x7, CL+2, STARTBURST sample stages, for freqs 400MHz, unbuffered DIMM
-
+DATA 0xffd01400 0x43000c30     # DDR Configuration register
+DATA 0xffd01404 0x37543000     # DDR Controller Control Low
+DATA 0xffd01408 0x22125441     # SDRAM Timing (Low) Register
+DATA 0xffd0140c 0x00000a32     # SDRAM Timing (High) Register
+...
 ```
 
 Now build your new [U-boot](https://www.denx.de/wiki/U-Boot) kwb image.
 
 ```bash
+$ git clone git clone https://github.com/nabilbendafi/u-boot -b feature/stormshield_sn150
 $ cd u-boot
+$ export ARCH=arm
+$ export CROSS_COMPILE=arm-linux-gnueabi-
 $ make mrproper
 $ make sn150_defconfig
 $ make
@@ -623,22 +640,36 @@ Congratulations ! You now have a Stormshield SNS running **Linux**.
 
 On _Debian_/_Ubuntu_ install cross-compilation toolchain
 ```bash
-sudo apt install gcc-arm-linux-gnueabi
+$ sudo apt install gcc-arm-linux-gnueabi
 ```
 
 ```bash
 # Download Linux kernel source code
-git clone https://github.com/torvalds/linux
-cd linux
+$ git clone https://github.com/torvalds/linux
+$ cd linux
 
-export ARCH=arm
-export CROSS_COMPILE=arm-linux-gnueabi-
-make multi_v5_defconfig
+$ export ARCH=arm
+$ export CROSS_COMPILE=arm-linux-gnueabi-
+$ make multi_v5_defconfig
 
 # Build kernel
-make -j5 uImage modules
-```
+$ export LOADADDR=0x00008000
+$ make -j5 uImage modules kirkwood-rd88f6281-a.dtb
+...
+  Kernel: arch/arm/boot/zImage is ready
+  UIMAGE  arch/arm/boot/uImage
+Image Name:   Linux-5.2.0-rc6
+Created:      Fri Jun 28 11:35:22 2019
+Image Type:   ARM Linux Kernel Image (uncompressed)
+Data Size:    5459528 Bytes = 5331.57 KiB = 5.21 MiB
+Load Address: 00008000
+Entry Point:  00008000
+  Kernel: arch/arm/boot/uImage is ready
 
+$ ls -l ./arch/arm/boot/{uImage,dts/kirkwood-rd88f6281-a.dtb}
+-rw-rw-r-- 1 developer developer    9813 juin  27 10:00 ./arch/arm/boot/dts/kirkwood-rd88f6281-a.dtb
+-rw-rw-r-- 1 developer developer 5459592 juin  27 10:00 ./arch/arm/boot/uImage
+```
 
 ## References
 
