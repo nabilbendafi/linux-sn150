@@ -49,9 +49,9 @@ def main():
     with open(output.as_posix(), 'w') as o:
         LOGGER.info('Open %s serial device' % device)
         try:
-            with serial.Serial(device, baudrate=115200, timeout=1.0) as s:
-                # Initialise SPI Flash read
-                cmd = b'sf probe 1\n'
+            with serial.Serial(device, baudrate=115200, timeout=3.0) as s:
+                # Send Ctrl-C for sanity
+                cmd = b'\x03'
                 LOGGER.debug('Send %s to %s' % (cmd, device))
                 s.write(cmd)
                 _ = s.readlines()  # Flush stdout content
@@ -59,34 +59,43 @@ def main():
                 address_format = '%08x'  # 0x00000000
                 offset = 0x0
 
-                for kib in range(512):  # MX25L4005 with page size 64 KiB, total 512 KiB
-                    cmd = b'sf read 0x08000000 %d 0x400\n' % kib  # 0x400 = 1024 (1KiB)
-                    LOGGER.debug('Send %s to %s' % (cmd, device))
-                    s.write(cmd)
-                    _ = s.readlines()  # Flush stdout content
+                # Initialise SPI Flash read
+                cmd = b'sf probe 1\n'
+                LOGGER.debug('Send %s to %s' % (cmd, device))
+                s.write(cmd)
+                _ = s.readlines()  # Flush stdout content
 
-                    cmd = b'md.b 0x08000000 0x400\n'
-                    LOGGER.debug('Send %s to %s' % (cmd, device))
-                    s.write(cmd)
-                    _ = s.readline()  # Flush stdout content
+                cmd = b'sf read 0x08000000 0 %x\n' % (512*1024)  # MX25L4005 with page size 64 KiB, total 512 KiB
+                LOGGER.debug('Send %s to %s' % (cmd, device))
+                s.write(cmd)
+                _ = s.readlines()  # Flush stdout content
 
-                    lines = s.readlines()
-                    for line in lines:
-                        line = line.decode('utf-8')
-                        regex = '(?P<offset>[0-9a-fA-F]+): (?P<hex>([0-9a-fA-F]+ ){15}[0-9a-fA-F]+) *(?P<ascii>.*)'
-                        regex = re.compile(regex)
-                        m = regex.match(line)
-                        if m:
-                            line = m.groupdict()
-                            hexa = ' '.join(re.findall('..',
-                                                       line['hex'].replace(' ', '')))
+                cmd = b'md.b 0x08000000 %x\n' % (512*1024)  # MX25L4005 with page size 64 KiB, total 512 KiB
+                LOGGER.debug('Send %s to %s' % (cmd, device))
+                s.write(cmd)
+                _ = s.readline()  # Flush stdout content
 
-                            line = "%s: %s  %s\n" % (address_format % (offset * 16),
-                                                     hexa,
-                                                     line['ascii'])
-                            offset += 1
-                            LOGGER.debug('Write %s to %s' % (line, output))
-                            o.write(line)
+                while True:
+                    line = s.readline()
+                    line = line.decode('utf-8')
+                    regex = '(?P<offset>[0-9a-fA-F]+): (?P<hex>([0-9a-fA-F]+ ){15}[0-9a-fA-F]+) *(?P<ascii>.*)'
+                    regex = re.compile(regex)
+                    m = regex.match(line)
+                    if m:
+                        line = m.groupdict()
+                        hexa = ' '.join(re.findall('..',
+                                                   line['hex'].replace(' ', '')))
+
+                        line = "%s: %s  %s\n" % (address_format % (offset * 16),
+                                                 hexa,
+                                                 line['ascii'])
+                        offset += 1
+                        LOGGER.debug('Write %s to %s' % (line, output))
+                        o.write(line)
+
+                    # No more dump data
+                    if not line:
+                        break
         except serial.serialutil.SerialException as se:
             LOGGER.error('Failed to open %s: %s' % (device, str(se)))
             sys.exit(1)
