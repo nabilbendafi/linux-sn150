@@ -54,21 +54,22 @@ def main():
                 cmd = b'sf probe 1\n'
                 LOGGER.debug('Send %s to %s' % (cmd, device))
                 s.write(cmd)
-                _ = s.readlines()
+                _ = s.readlines()  # Flush stdout content
 
                 address_format = '%08x'  # 0x00000000
                 offset = 0x0
 
-                for i in range(2):
-                    cmd = b'sf read 0x08000000 %d 100\n' % (i*100)
+                for kib in range(512):  # MX25L4005 with page size 64 KiB, total 512 KiB
+                    cmd = b'sf read 0x08000000 %d 0x400\n' % kib  # 0x400 = 1024 (1KiB)
                     LOGGER.debug('Send %s to %s' % (cmd, device))
                     s.write(cmd)
-                    _ = s.readlines()
+                    _ = s.readlines()  # Flush stdout content
 
-                    cmd = b'md.b 0x08000000\n'
+                    cmd = b'md.b 0x08000000 0x400\n'
                     LOGGER.debug('Send %s to %s' % (cmd, device))
                     s.write(cmd)
-                    _ = s.readline()
+                    _ = s.readline()  # Flush stdout content
+
                     lines = s.readlines()
                     for line in lines:
                         line = line.decode('utf-8')
@@ -88,6 +89,7 @@ def main():
                             o.write(line)
         except serial.serialutil.SerialException as se:
             LOGGER.error('Failed to open %s: %s' % (device, str(se)))
+            sys.exit(1)
     with open(output.as_posix(),'r') as txt:
         LOGGER.info('Convert dump to binrary')
         hex_dump = txt.read()
